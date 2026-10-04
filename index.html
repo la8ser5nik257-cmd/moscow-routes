@@ -48,7 +48,7 @@
   </section>
 
   <section class="card">
-    <label for="orsKey">Ключ HeiGIT / openrouteservice — геокодирование и маршрут</label>
+    <label for="orsKey">Ключ HeiGIT / openrouteservice — построение маршрута</label>
     <div class="row">
       <input id="orsKey" type="password" placeholder="HeiGIT API key" autocomplete="off" style="flex:1;min-width:220px">
       <button id="saveOrsBtn">Сохранить</button>
@@ -57,9 +57,9 @@
   </section>
 
   <section class="card">
-    <label for="points">Точки маршрута — по одной в строке</label>
+    <label for="points">Точки маршрута — название и проверенные координаты</label>
     <textarea id="points"></textarea>
-    <div class="small">Можно вводить адреса или координаты в формате 55.7558,37.6176.</div>
+    <div class="small">Формат каждой строки: Название | широта,долгота. Для готовых маршрутов координаты обязательны — свободное геокодирование не используется.</div>
   </section>
 
   <section class="card">
@@ -71,16 +71,16 @@
 
 <script>
 const DEFAULT_POINTS = [
-  'Москва, метро Красные Ворота',
-  'Москва, Садовая-Спасская улица, 11/1',
-  'Москва, Милютинский переулок, 12А',
-  'Москва, Кривоколенный переулок, 4, стр. 1',
-  'Москва, Архангельский переулок, 15А',
-  'Москва, Колпачный переулок, 10/7, стр. 4',
-  'Москва, Малый Ивановский переулок, 2, стр. 33',
-  'Москва, Хитровская площадь',
-  'Москва, Яузская улица, 11/6',
-  'Москва, метро Таганская'
+  'Старт: метро «Красные Ворота» | 55.769068,37.649121',
+  '1. Наркомзем | 55.770400,37.645500',
+  '2. Милютинский переулок, район дома 12 | 55.762910,37.632269',
+  '3. Дом Веневитинова | 55.760556,37.633333',
+  '4. Меншикова башня | 55.763191,37.638993',
+  '5. Палаты Мазепы | 55.756403,37.641518',
+  '6. Ивановская горка / Иоанно-Предтеченский монастырь | 55.754578,37.640129',
+  '7. Хитровская площадь | 55.752486,37.642477',
+  '8. Усадьба Баташева | 55.746907,37.648241',
+  'Финиш: метро «Таганская» | 55.741667,37.655556'
 ];
 
 const $ = id => document.getElementById(id);
@@ -131,29 +131,6 @@ async function ensureMap() {
   });
 }
 
-function parseCoord(text) {
-  const m = text.match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
-  if (!m) return null;
-  return [Number(m[2]), Number(m[1])]; // ORS: [lon,lat]
-}
-
-async function geocodeOne(text, key) {
-  const direct = parseCoord(text);
-  if (direct) return direct;
-
-  const url = new URL('https://api.heigit.org/pelias/v1/search');
-  url.searchParams.set('api_key', key);
-  url.searchParams.set('text', text);
-  url.searchParams.set('size', '1');
-  url.searchParams.set('boundary.country', 'RU');
-
-  const r = await fetch(url.toString(), {headers:{'Accept':'application/json'}});
-  if (!r.ok) throw new Error('Геокодирование: HTTP ' + r.status + ' для «' + text + '»');
-  const j = await r.json();
-  const f = j.features && j.features[0];
-  if (!f || !f.geometry || !f.geometry.coordinates) throw new Error('Не найден адрес: «' + text + '»');
-  return f.geometry.coordinates; // [lon,lat]
-}
 
 async function routeGeoJSON(coords, profile, key) {
   const url = 'https://api.heigit.org/openrouteservice/v2/directions/' + profile + '/geojson';
@@ -179,7 +156,7 @@ async function routeGeoJSON(coords, profile, key) {
   return JSON.parse(body);
 }
 
-function drawRoute(route, waypointCoords) {
+function drawRoute(route, points) {
   if (routeLine) map.geoObjects.remove(routeLine);
   if (pointCollection) map.geoObjects.remove(pointCollection);
 
@@ -191,8 +168,8 @@ function drawRoute(route, waypointCoords) {
   map.geoObjects.add(routeLine);
 
   pointCollection = new ymaps.GeoObjectCollection();
-  waypointCoords.forEach(([lon,lat], i) => {
-    const last = waypointCoords.length - 1;
+  points.forEach(({name,lat,lon}, i) => {
+    const last = points.length - 1;
 
     // Compact numbered markers:
     // start = 0, intermediate sightseeing points = 1..N, finish = Ф
@@ -211,7 +188,7 @@ function drawRoute(route, waypointCoords) {
 
     pointCollection.add(new ymaps.Placemark([lat,lon], {
       iconContent,
-      balloonContent: getPoints()[i] || ('Точка ' + i)
+      balloonContent: name
     }, {
       preset
     }));
@@ -224,9 +201,9 @@ function drawRoute(route, waypointCoords) {
   if (summary) {
     const km = (summary.distance/1000).toFixed(1);
     const min = Math.round(summary.duration/60);
-    status('Маршрут построен. Длина: ' + km + ' км. Расчётное время: ' + min + ' мин. Точек: ' + waypointCoords.length + '.');
+    status('Маршрут построен. Длина: ' + km + ' км. Расчётное время: ' + min + ' мин. Точек: ' + points.length + '.');
   } else {
-    status('Маршрут построен. Точек: ' + waypointCoords.length + '.');
+    status('Маршрут построен. Точек: ' + points.length + '.');
   }
 }
 
@@ -235,26 +212,40 @@ async function buildRoute() {
   const oKey = $('orsKey').value.trim() || localStorage.getItem('heigit_ors_api_key') || '';
   if (!yKey) return status('Нет ключа Yandex JavaScript API.');
   if (!oKey) return status('Нет ключа HeiGIT/openrouteservice.');
-  const points = getPoints();
+  let points;
+  try {
+    points = parseAllPoints();
+  } catch (e) {
+    return status('ОШИБКА:
+' + e.message);
+  }
+
   if (points.length < 2) return status('Нужно минимум две точки.');
 
   try {
-    status('1/3 Загружаю Яндекс Карту…');
+    status('1/2 Загружаю Яндекс Карту…');
     await loadYandexApi(yKey);
     await ensureMap();
 
-    status('2/3 Определяю координаты ' + points.length + ' точек…');
-    const coords = [];
-    for (let i=0; i<points.length; i++) {
-      status('2/3 Геокодирование: ' + (i+1) + ' из ' + points.length + '\n' + points[i]);
-      coords.push(await geocodeOne(points[i], oKey));
+    // Простая защита от грубой ошибки координат:
+    // каждая соседняя опорная точка должна быть разумно близка для городской прогулки.
+    for (let i = 0; i < points.length - 1; i++) {
+      const a = points[i], b = points[i + 1];
+      const dx = (b.lon - a.lon) * 63.0;
+      const dy = (b.lat - a.lat) * 111.0;
+      const straightKm = Math.sqrt(dx*dx + dy*dy);
+      if (straightKm > 4.0) {
+        throw new Error('Подозрительный скачок между точками «' + a.name + '» и «' + b.name + '»: около ' + straightKm.toFixed(1) + ' км по прямой.');
+      }
     }
 
-    status('3/3 Строю ' + ($('mode').value === 'foot-walking' ? 'пешеходный' : 'велосипедный') + ' маршрут…');
+    status('2/2 Строю ' + ($('mode').value === 'foot-walking' ? 'пешеходный' : 'велосипедный') + ' маршрут по проверенным координатам…');
+    const coords = points.map(p => p.ors);
     const route = await routeGeoJSON(coords, $('mode').value, oKey);
-    drawRoute(route, coords);
+    drawRoute(route, points);
   } catch(e) {
-    status('ОШИБКА:\n' + e.message);
+    status('ОШИБКА:
+' + e.message);
   }
 }
 
