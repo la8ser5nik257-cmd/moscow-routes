@@ -35,6 +35,7 @@
       <option value="cycling-regular">Велосипед</option>
     </select>
     <button class="primary" id="buildBtn">Построить маршрут</button>
+    <button id="copyLinkBtn">Скопировать ссылку маршрута</button>
   </div>
 </header>
 
@@ -59,7 +60,7 @@
   <section class="card">
     <label for="points">Точки маршрута — название и проверенные координаты</label>
     <textarea id="points"></textarea>
-    <div class="small">Формат каждой строки: Название | широта,долгота. Для готовых маршрутов координаты обязательны — свободное геокодирование не используется.</div>
+    <div class="small">Формат: Название | широта,долгота. Готовый маршрут можно передать одной ссылкой: точки и режим загрузятся автоматически.</div>
   </section>
 
   <section class="card">
@@ -89,7 +90,25 @@ let routeLine = null;
 let pointCollection = null;
 let apiReady = false;
 
-$('points').value = DEFAULT_POINTS.join('\n');
+function loadRouteFromUrl() {
+  const params = new URLSearchParams(location.search);
+  const mode = params.get('mode');
+  const encodedPoints = params.getAll('p');
+
+  if (mode === 'foot-walking' || mode === 'cycling-regular') {
+    $('mode').value = mode;
+  }
+
+  if (encodedPoints.length >= 2) {
+    $('points').value = encodedPoints.join('\n');
+    return true;
+  }
+
+  $('points').value = DEFAULT_POINTS.join('\n');
+  return false;
+}
+
+const routeCameFromUrl = loadRouteFromUrl();
 
 function status(msg) { $('status').textContent = msg; }
 
@@ -123,6 +142,25 @@ function parsePointLine(line, index) {
 
 function parseAllPoints() {
   return getPointLines().map(parsePointLine);
+}
+
+function buildShareUrl() {
+  const url = new URL(location.origin + location.pathname);
+  url.searchParams.set('mode', $('mode').value);
+
+  const lines = getPointLines();
+  lines.forEach(line => url.searchParams.append('p', line));
+  return url.toString();
+}
+
+async function copyRouteLink() {
+  try {
+    const url = buildShareUrl();
+    await navigator.clipboard.writeText(url);
+    status('Ссылка маршрута скопирована. API-ключи в ссылку не входят.');
+  } catch (e) {
+    status('Не удалось скопировать ссылку автоматически. Адрес:\n' + buildShareUrl());
+  }
 }
 
 function saveKey(field, storageName, label) {
@@ -280,6 +318,22 @@ async function buildRoute() {
 }
 
 $('buildBtn').onclick = buildRoute;
+$('copyLinkBtn').onclick = copyRouteLink;
+
+async function autoBuildIfReady() {
+  const yKey = localStorage.getItem('yandex_js_api_key') || '';
+  const oKey = localStorage.getItem('heigit_ors_api_key') || '';
+
+  if (routeCameFromUrl && yKey && oKey) {
+    status('Маршрут получен из ссылки. Строю автоматически…');
+    await buildRoute();
+  } else if (routeCameFromUrl) {
+    status('Маршрут получен из ссылки. Один раз сохраните оба API-ключа на этом устройстве и нажмите «Построить маршрут».');
+  }
+}
+
+setTimeout(autoBuildIfReady, 50);
+
 </script>
 </body>
 </html>
