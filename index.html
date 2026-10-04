@@ -216,8 +216,7 @@ async function buildRoute() {
   try {
     points = parseAllPoints();
   } catch (e) {
-    return status('ОШИБКА:
-' + e.message);
+    return status('ОШИБКА\n' + e.message);
   }
 
   if (points.length < 2) return status('Нужно минимум две точки.');
@@ -244,8 +243,7 @@ async function buildRoute() {
     const route = await routeGeoJSON(coords, $('mode').value, oKey);
     drawRoute(route, points);
   } catch(e) {
-    status('ОШИБКА:
-' + e.message);
+    status('ОШИБКА\n' + e.message);
   }
 }
 
