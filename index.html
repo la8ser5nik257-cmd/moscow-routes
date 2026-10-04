@@ -193,20 +193,25 @@ function drawRoute(route, waypointCoords) {
   pointCollection = new ymaps.GeoObjectCollection();
   waypointCoords.forEach(([lon,lat], i) => {
     const last = waypointCoords.length - 1;
-    let preset = 'islands#blueCircleDotIcon';
-    let iconContent = String(i + 1);
+
+    // Compact numbered markers:
+    // start = 0, intermediate sightseeing points = 1..N, finish = Ф
+    let iconContent;
+    let preset = 'islands#blueCircleIcon';
 
     if (i === 0) {
-      preset = 'islands#greenCircleIcon';
       iconContent = 'С';
+      preset = 'islands#greenCircleIcon';
     } else if (i === last) {
-      preset = 'islands#redCircleIcon';
       iconContent = 'Ф';
+      preset = 'islands#redCircleIcon';
+    } else {
+      iconContent = String(i);
     }
 
     pointCollection.add(new ymaps.Placemark([lat,lon], {
       iconContent,
-      balloonContent: getPoints()[i] || ('Точка ' + (i+1))
+      balloonContent: getPoints()[i] || ('Точка ' + i)
     }, {
       preset
     }));
