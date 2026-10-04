@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Маршрут по Москве — Яндекс Карты</title>
+  <style>
+    :root { font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:#f4f4f4; color:#111; }
+    header { padding:12px 14px; background:#fff; position:sticky; top:0; z-index:10; box-shadow:0 1px 6px #0002; }
+    h1 { margin:0 0 8px; font-size:18px; }
+    .controls { display:flex; gap:8px; flex-wrap:wrap; }
+    button, input, select, textarea {
+      font:inherit; border:1px solid #ccc; border-radius:10px; padding:10px 12px; background:#fff;
+    }
+    button { cursor:pointer; font-weight:600; }
+    button.primary { background:#111; color:#fff; border-color:#111; }
+    main { padding:10px; }
+    .card { background:#fff; border-radius:14px; padding:12px; margin-bottom:10px; box-shadow:0 1px 6px #0001; }
+    label { display:block; font-weight:600; margin-bottom:6px; }
+    input[type="password"], textarea { width:100%; }
+    textarea { min-height:150px; resize:vertical; }
+    #map { width:100%; height:58vh; min-height:420px; border-radius:14px; overflow:hidden; background:#ddd; }
+    #status { font-size:14px; line-height:1.4; }
+    .small { font-size:13px; color:#555; }
+    .hidden { display:none; }
+    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>Москва: готовый маршрут в Яндекс Картах</h1>
+  <div class="controls">
+    <select id="mode" aria-label="Тип маршрута">
+      <option value="pedestrian">Пешком</option>
+      <option value="bicycle">Велосипед</option>
+    </select>
+    <button class="primary" id="buildBtn">Построить маршрут</button>
+    <button id="shareBtn">Скопировать ссылку</button>
+  </div>
+</header>
+
+<main>
+  <section class="card" id="keyCard">
+    <label for="apiKey">API‑ключ Yandex JavaScript API</label>
+    <div class="row">
+      <input id="apiKey" type="password" placeholder="Вставьте ключ один раз" autocomplete="off" style="flex:1;min-width:220px">
+      <button id="saveKeyBtn">Сохранить на этом телефоне</button>
+    </div>
+    <div class="small">Ключ хранится только в localStorage браузера на этом устройстве и не добавляется в ссылку маршрута.</div>
+  </section>
+
+  <section class="card">
+    <label for="points">Точки маршрута — по одной в строке, в нужном порядке</label>
+    <textarea id="points"></textarea>
+    <div class="small">Можно использовать точные адреса или координаты вида 55.7558,37.6176.</div>
+  </section>
+
+  <section class="card">
+    <div id="status">Введите API‑ключ и нажмите «Построить маршрут».</div>
+  </section>
+
+  <div id="map"></div>
+</main>
+
+<script>
+const DEFAULT_POINTS = [
+  'Москва, метро Красные Ворота',
+  'Москва, Садовая-Спасская улица, 11/1',
+  'Москва, Милютинский переулок, 12А',
+  'Москва, Кривоколенный переулок, 4, стр. 1',
+  'Москва, Архангельский переулок, 15А',
+  'Москва, Колпачный переулок, 10/7, стр. 4',
+  'Москва, Малый Ивановский переулок, 2, стр. 33',
+  'Москва, Хитровская площадь',
+  'Москва, Яузская улица, 11/6',
+  'Москва, метро Таганская'
+];
+
+const $ = id => document.getElementById(id);
+let map = null;
+let multiRoute = null;
+let apiReady = false;
+
+function parseRouteFromUrl() {
+  const params = new URLSearchParams(location.search);
+  const urlPoints = params.getAll('p').filter(Boolean);
+  const mode = params.get('mode');
+  if (mode === 'pedestrian' || mode === 'bicycle') $('mode').value = mode;
+  $('points').value = (urlPoints.length ? urlPoints : DEFAULT_POINTS).join('\n');
+}
+
+function getPoints() {
+  return $('points').value.split('\n').map(x => x.trim()).filter(Boolean);
+}
+
+function setStatus(msg) { $('status').textContent = msg; }
+
+function loadYandexApi(key) {
+  return new Promise((resolve, reject) => {
+    if (apiReady && window.ymaps) return resolve();
+    const existing = document.getElementById('yandex-api');
+    if (existing) existing.remove();
+
+    const s = document.createElement('script');
+    s.id = 'yandex-api';
+    s.src = 'https://api-maps.yandex.ru/2.1/?apikey=' + encodeURIComponent(key) + '&lang=ru_RU';
+    s.onload = () => {
+      ymaps.ready(() => { apiReady = true; resolve(); });
+    };
+    s.onerror = () => reject(new Error('Не удалось загрузить Yandex Maps API'));
+    document.head.appendChild(s);
+  });
+}
+
+async function ensureMap() {
+  if (map) return;
+  map = new ymaps.Map('map', {
+    center: [55.7558, 37.6176],
+    zoom: 11,
+    controls: ['zoomControl', 'geolocationControl', 'fullscreenControl']
+  });
+}
+
+async function buildRoute() {
+  const key = $('apiKey').value.trim() || localStorage.getItem('yandex_js_api_key') || '';
+  if (!key) {
+    setStatus('Нужен API‑ключ Yandex JavaScript API. Вставьте его выше.');
+    $('keyCard').scrollIntoView({behavior:'smooth'});
+    return;
+  }
+
+  const points = getPoints();
+  if (points.length < 2) {
+    setStatus('Нужно минимум две точки.');
+    return;
+  }
+
+  setStatus('Загружаю Яндекс Карты и строю маршрут…');
+
+  try {
+    await loadYandexApi(key);
+    await ensureMap();
+
+    if (multiRoute) map.geoObjects.remove(multiRoute);
+
+    multiRoute = new ymaps.multiRouter.MultiRoute({
+      referencePoints: points,
+      params: {
+        routingMode: $('mode').value,
+        results: 1
+      }
+    }, {
+      boundsAutoApply: true,
+      wayPointVisible: true,
+      viaPointVisible: true
+    });
+
+    multiRoute.model.events.add('requestsuccess', function () {
+      const active = multiRoute.getActiveRoute();
+      let extra = '';
+      if (active) {
+        const props = active.properties;
+        const distance = props.get('distance');
+        const duration = props.get('duration');
+        if (distance && distance.text) extra += ' Расстояние: ' + distance.text + '.';
+        if (duration && duration.text) extra += ' Время: ' + duration.text + '.';
+      }
+      setStatus('Маршрут построен: ' + ( $('mode').value === 'bicycle' ? 'велосипед' : 'пешком') +
+        ', точек: ' + points.length + '.' + extra);
+    });
+
+    multiRoute.model.events.add('requestfail', function (e) {
+      setStatus('Яндекс не смог построить маршрут. Проверьте ключ, адреса и подключённый продукт маршрутизации.');
+    });
+
+    map.geoObjects.add(multiRoute);
+  } catch (e) {
+    setStatus('Ошибка: ' + e.message + '. Проверьте API‑ключ и настройки Referer/домена.');
+  }
+}
+
+function saveKey() {
+  const key = $('apiKey').value.trim();
+  if (!key) return setStatus('Сначала вставьте API‑ключ.');
+  localStorage.setItem('yandex_js_api_key', key);
+  setStatus('Ключ сохранён только в браузере этого устройства.');
+}
+
+async function copyShareLink() {
+  const url = new URL(location.href);
+  url.search = '';
+  url.searchParams.set('mode', $('mode').value);
+  getPoints().forEach(p => url.searchParams.append('p', p));
+  try {
+    await navigator.clipboard.writeText(url.toString());
+    setStatus('Ссылка маршрута скопирована. API‑ключ в неё НЕ входит.');
+  } catch {
+    setStatus('Не удалось скопировать автоматически. Ссылка: ' + url.toString());
+  }
+}
+
+$('buildBtn').addEventListener('click', buildRoute);
+$('saveKeyBtn').addEventListener('click', saveKey);
+$('shareBtn').addEventListener('click', copyShareLink);
+$('mode').addEventListener('change', () => { if (apiReady) buildRoute(); });
+
+parseRouteFromUrl();
+const savedKey = localStorage.getItem('yandex_js_api_key');
+if (savedKey) {
+  $('apiKey').value = savedKey;
+  setStatus('Ключ найден на этом устройстве. Нажмите «Построить маршрут».');
+}
+</script>
+</body>
+</html>
