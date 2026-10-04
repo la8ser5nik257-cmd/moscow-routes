@@ -1,118 +1,356 @@
-# 04. НАВИГАЦИЯ — YANDEX + HEIGIT
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Москва — маршруты</title>
+  <style>
+    :root { font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:#f4f4f4; color:#111; }
+    header { padding:12px 14px; background:#fff; position:sticky; top:0; z-index:10; box-shadow:0 1px 6px #0002; }
+    h1 { margin:0 0 8px; font-size:18px; }
+    .controls,.row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    button,input,select,textarea {
+      font:inherit; border:1px solid #ccc; border-radius:10px; padding:10px 12px; background:#fff;
+    }
+    button { cursor:pointer; font-weight:600; }
+    button.primary { background:#111; color:#fff; border-color:#111; }
+    main { padding:10px; }
+    .card { background:#fff; border-radius:14px; padding:12px; margin-bottom:10px; box-shadow:0 1px 6px #0001; }
+    label { display:block; font-weight:600; margin-bottom:6px; }
+    input[type="password"], textarea { width:100%; }
+    textarea { min-height:170px; resize:vertical; }
+    #map { width:100%; height:60vh; min-height:430px; border-radius:14px; overflow:hidden; background:#ddd; }
+    #status { font-size:14px; line-height:1.5; white-space:pre-line; }
+    .small { font-size:13px; color:#555; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>Москва: маршрут на Яндекс Карте</h1>
+  <div class="controls">
+    <select id="mode" aria-label="Тип маршрута">
+      <option value="foot-walking">Пешком</option>
+      <option value="cycling-regular">Велосипед</option>
+    </select>
+    <button class="primary" id="buildBtn">Построить маршрут</button>
+    <button id="copyLinkBtn">Скопировать ссылку маршрута</button>
+  </div>
+</header>
 
-## Рабочая схема
-- Yandex JavaScript API отображает карту.
-- HeiGIT/openrouteservice строит пешую или велосипедную трассу.
-- Рабочий генератор: https://la8ser5nik257-cmd.github.io/moscow-routes/
+<main>
+  <section class="card">
+    <label for="yandexKey">Ключ Yandex JavaScript API — только карта</label>
+    <div class="row">
+      <input id="yandexKey" type="password" placeholder="Yandex API key" autocomplete="off" style="flex:1;min-width:220px">
+      <button id="saveYandexBtn">Сохранить</button>
+    </div>
+  </section>
 
-API-ключи в файлы проекта, ответы и ссылки не записывай. Они хранятся локально в браузере пользователя на POCO.
+  <section class="card">
+    <label for="orsKey">Ключ HeiGIT / openrouteservice — построение маршрута</label>
+    <div class="row">
+      <input id="orsKey" type="password" placeholder="HeiGIT API key" autocomplete="off" style="flex:1;min-width:220px">
+      <button id="saveOrsBtn">Сохранить</button>
+    </div>
+    <div class="small">Оба ключа сохраняются только в localStorage браузера на этом устройстве и не записаны в код сайта.</div>
+  </section>
 
-## Координаты обязательны
-Для финального маршрута не передавай точки только текстовыми названиями и не полагайся на свободное геокодирование.
+  <section class="card">
+    <label for="points">Точки маршрута — название и проверенные координаты</label>
+    <textarea id="points"></textarea>
+    <div class="small">Формат: Название | широта,долгота. Готовый маршрут можно передать одной ссылкой: точки и режим загрузятся автоматически.</div>
+  </section>
 
-Каждую опорную и техническую точку заранее проверь и выдай в формате:
+  <section class="card">
+    <div id="status">Сохраните два ключа и нажмите «Построить маршрут».</div>
+  </section>
 
-`Название | широта,долгота`
+  <div id="map"></div>
+</main>
 
-Координаты должны соответствовать:
-- реальному входу/выходу/проходу;
-- нужной стороне улицы;
-- фактическому месту остановки;
-- реально доступному участку пешеходной или велосипедной сети.
+<script>
+const DEFAULT_POINTS = [
+  'Старт: метро «Красные Ворота», выход № 1 | 55.768610,37.648950',
+  '1. Наркомзем | 55.770400,37.645500',
+  '2. Милютинский переулок, район дома 12 | 55.762910,37.632269',
+  '3. Дом Веневитинова | 55.760556,37.633333',
+  '4. Меншикова башня | 55.763191,37.638993',
+  '5. Палаты Мазепы | 55.756403,37.641518',
+  '6. Ивановская горка / Иоанно-Предтеченский монастырь | 55.754578,37.640129',
+  '7. Хитровская площадь | 55.752486,37.642477',
+  '8. Усадьба Баташева | 55.746907,37.648241',
+  'Финиш: метро «Таганская» | 55.741667,37.655556'
+];
 
-Если старт или финиш у метро, используй координаты конкретного нужного выхода, а не центра станции.
+const $ = id => document.getElementById(id);
+let map = null;
+let routeLine = null;
+let pointCollection = null;
+let apiReady = false;
 
-## Как получать координаты
-Для каждой точки сначала используй актуальный интернет-поиск и картографические источники.
+function decodeRouteParam(value) {
+  let result = value;
+  // URLSearchParams уже декодирует один слой. Но ссылки из чатов/Markdown
+  // иногда приходят закодированными повторно. Снимаем ещё до трёх слоёв.
+  for (let i = 0; i < 3; i++) {
+    if (!/%[0-9A-Fa-f]{2}/.test(result)) break;
+    try {
+      const decoded = decodeURIComponent(result);
+      if (decoded === result) break;
+      result = decoded;
+    } catch (e) {
+      break;
+    }
+  }
+  return result;
+}
 
-Приоритет:
-1. официальный источник объекта или транспортной инфраструктуры;
-2. Яндекс Карты / проверяемый картографический объект;
-3. другой надёжный картографический или справочный источник.
+function loadRouteFromUrl() {
+  const params = new URLSearchParams(location.search);
+  const mode = decodeRouteParam(params.get('mode') || '');
+  const encodedPoints = params.getAll('p').map(decodeRouteParam);
 
-Если точная координата нужного входа, выхода или технической точки не найдена сразу:
-1. продолжи поиск по названию выхода, адресу, улице, стороне дороги и ближайшему объекту;
-2. найди проверяемую точку на реально доступной пешеходной/велосипедной сети;
-3. если исходную точку надёжно определить нельзя, замени её на ближайшую проверяемую точку, сохраняющую замысел маршрута;
-4. если из-за этого меняется трасса, скорректируй последовательность маршрута.
+  if (mode === 'foot-walking' || mode === 'cycling-regular') {
+    $('mode').value = mode;
+  }
 
-Не оставляй в финальном ответе заглушки вроде:
-- `[точная координата]`;
-- `[координата требует проверки]`;
-- `[уточнить в генераторе]`.
+  if (encodedPoints.length >= 2) {
+    $('points').value = encodedPoints.join('\n');
+    return true;
+  }
 
-Если точку невозможно надёжно определить даже после поиска, не считай её частью готового маршрута — замени её или перестрой участок.
+  $('points').value = DEFAULT_POINTS.join('\n');
+  return false;
+}
 
-## Порядок точек
-Сохраняй порядок:
+const routeCameFromUrl = loadRouteFromUrl();
 
-`старт → экскурсионные точки → при необходимости технические точки → финиш`
+function status(msg) { $('status').textContent = msg; }
 
-Технические точки можно добавлять, чтобы провести трассу по нужной улице, переулку, парку, набережной или стороне дороги.
+function getPointLines() {
+  return $('points').value.split('\n').map(x => x.trim()).filter(Boolean);
+}
 
-## Готовая ссылка для POCO — обязательна
-Для каждого готового маршрута формируй одну кликабельную ссылку на рабочий генератор.
+function parsePointLine(line, index) {
+  const parts = line.split('|');
+  if (parts.length !== 2) {
+    throw new Error('Строка ' + (index + 1) + ': нужен формат «Название | широта,долгота»');
+  }
 
-Ссылка должна содержать:
-- режим маршрута;
-- все точки в правильной последовательности;
-- названия точек;
-- проверенные координаты.
+  const name = parts[0].trim();
+  const coordText = parts[1].trim();
+  const m = coordText.match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
 
-Формат:
+  if (!name || !m) {
+    throw new Error('Строка ' + (index + 1) + ': неверное название или координаты');
+  }
 
-`https://la8ser5nik257-cmd.github.io/moscow-routes/?mode=...&p=...&p=...`
+  const lat = Number(m[1]);
+  const lon = Number(m[2]);
 
-Для пешего маршрута:
-`mode=foot-walking`
+  if (lat < 55.0 || lat > 56.2 || lon < 36.5 || lon > 38.7) {
+    throw new Error('Строка ' + (index + 1) + ': координаты выглядят как точка вне Москвы/ближнего Подмосковья');
+  }
 
-Для велосипедного:
-`mode=cycling-regular`
+  return { name, lat, lon, ors: [lon, lat] };
+}
 
-Каждый `p=` содержит одну точку:
+function parseAllPoints() {
+  return getPointLines().map(parsePointLine);
+}
 
-`Название | широта,долгота`
+function buildShareUrl() {
+  const url = new URL(location.origin + location.pathname);
+  url.searchParams.set('mode', $('mode').value);
 
-Все значения URL-кодируй.
+  const lines = getPointLines();
+  lines.forEach(line => url.searchParams.append('p', line));
+  return url.toString();
+}
 
-API-ключи в URL не включай.
+async function copyRouteLink() {
+  try {
+    const url = buildShareUrl();
+    await navigator.clipboard.writeText(url);
+    status('Ссылка маршрута скопирована. API-ключи в ссылку не входят.');
+  } catch (e) {
+    status('Не удалось скопировать ссылку автоматически. Адрес:\n' + buildShareUrl());
+  }
+}
 
-Пользовательский сценарий:
-1. пользователь нажимает ссылку на POCO;
-2. страница получает режим и точки;
-3. сохранённые на POCO ключи используются локально;
-4. маршрут строится автоматически без ручного ввода.
+function saveKey(field, storageName, label) {
+  const key = $(field).value.trim();
+  if (!key) return status('Сначала вставьте ' + label + '.');
+  localStorage.setItem(storageName, key);
+  status(label + ' сохранён на этом устройстве.');
+}
 
-Если готовая ссылка не сформирована, маршрут не считай полностью готовым.
+$('saveYandexBtn').onclick = () => saveKey('yandexKey','yandex_js_api_key','Yandex API key');
+$('saveOrsBtn').onclick = () => saveKey('orsKey','heigit_ors_api_key','HeiGIT API key');
 
-## Контроль до выдачи ссылки
-До формирования финальной ссылки обязательно проверь:
-- что у каждой точки есть конкретные координаты;
-- что координаты лежат в Москве или нужной зоне маршрута;
-- что порядок точек логичен;
-- что между соседними точками нет явно ошибочных скачков;
-- что старт и финиш соответствуют конкретным выходам/входам, если это требуется;
-- что технические точки стоят на доступной сети, а не в центре здания, пруда или закрытой территории.
+const savedY = localStorage.getItem('yandex_js_api_key');
+const savedO = localStorage.getItem('heigit_ors_api_key');
+if (savedY) $('yandexKey').value = savedY;
+if (savedO) $('orsKey').value = savedO;
 
-Если обнаружена сомнительная точка, сначала исправь или замени её и только затем формируй ссылку.
+function loadYandexApi(key) {
+  return new Promise((resolve,reject) => {
+    if (apiReady && window.ymaps) return resolve();
+    const old = document.getElementById('yandex-api');
+    if (old) old.remove();
+    const s = document.createElement('script');
+    s.id = 'yandex-api';
+    s.src = 'https://api-maps.yandex.ru/2.1/?apikey=' + encodeURIComponent(key) + '&lang=ru_RU';
+    s.onload = () => ymaps.ready(() => { apiReady = true; resolve(); });
+    s.onerror = () => reject(new Error('Не удалось загрузить Yandex JavaScript API'));
+    document.head.appendChild(s);
+  });
+}
 
-## Контроль после открытия на POCO
-После открытия ссылки пользователь получает фактическую геометрию маршрута на Яндекс-карте.
+async function ensureMap() {
+  if (map) return;
+  map = new ymaps.Map('map', {
+    center:[55.7558,37.6176], zoom:11,
+    controls:['zoomControl','geolocationControl','fullscreenControl']
+  });
+}
 
-Если пользователь сообщает о:
-- лишнем крюке;
-- возврате;
-- петле;
-- неверной стороне улицы;
-- ошибочной привязке к пешеходной/велосипедной сети;
-- запрещённом для велосипеда участке,
 
-скорректируй координаты или добавь техническую точку и сформируй новую готовую ссылку.
+async function routeGeoJSON(coords, profile, key) {
+  const url = 'https://api.heigit.org/openrouteservice/v2/directions/' + profile + '/geojson';
+  const r = await fetch(url, {
+    method:'POST',
+    headers:{
+      'Authorization': key,
+      'Content-Type':'application/json',
+      'Accept':'application/geo+json, application/json'
+    },
+    body: JSON.stringify({
+      coordinates: coords,
+      instructions: false,
+      elevation: false
+    })
+  });
+  const body = await r.text();
+  if (!r.ok) {
+    let detail = body;
+    try { const j = JSON.parse(body); detail = j.error?.message || j.message || body; } catch(e) {}
+    throw new Error('Маршрутизация: HTTP ' + r.status + '. ' + detail);
+  }
+  return JSON.parse(body);
+}
 
-## Итог навигационного блока
-В готовом маршруте обязательно должны быть:
-1. список точек `Название | широта,долгота`;
-2. готовая кликабельная ссылка для POCO;
-3. краткая инструкция: «Откройте ссылку на POCO — маршрут построится автоматически».
+function drawRoute(route, points) {
+  if (routeLine) map.geoObjects.remove(routeLine);
+  if (pointCollection) map.geoObjects.remove(pointCollection);
 
-Встроенная карта ChatGPT может использоваться только дополнительно и не заменяет рабочий генератор.
+  const geom = route.features?.[0]?.geometry;
+  if (!geom || geom.type !== 'LineString') throw new Error('Маршрутизатор не вернул линию маршрута');
+
+  const ycoords = geom.coordinates.map(([lon,lat]) => [lat,lon]);
+  routeLine = new ymaps.Polyline(ycoords, {}, {strokeWidth:6, strokeOpacity:0.9});
+  map.geoObjects.add(routeLine);
+
+  pointCollection = new ymaps.GeoObjectCollection();
+  points.forEach(({name,lat,lon}, i) => {
+    const last = points.length - 1;
+
+    // Compact numbered markers:
+    // start = 0, intermediate sightseeing points = 1..N, finish = Ф
+    let iconContent;
+    let preset = 'islands#blueCircleIcon';
+
+    if (i === 0) {
+      iconContent = 'С';
+      preset = 'islands#greenCircleIcon';
+    } else if (i === last) {
+      iconContent = 'Ф';
+      preset = 'islands#redCircleIcon';
+    } else {
+      iconContent = String(i);
+    }
+
+    pointCollection.add(new ymaps.Placemark([lat,lon], {
+      iconContent,
+      balloonContent: name
+    }, {
+      preset
+    }));
+  });
+  map.geoObjects.add(pointCollection);
+
+  map.setBounds(routeLine.geometry.getBounds(), {checkZoomRange:true, zoomMargin:30});
+
+  const summary = route.features?.[0]?.properties?.summary;
+  if (summary) {
+    const km = (summary.distance/1000).toFixed(1);
+    const min = Math.round(summary.duration/60);
+    status('Маршрут построен. Длина: ' + km + ' км. Расчётное время: ' + min + ' мин. Точек: ' + points.length + '.');
+  } else {
+    status('Маршрут построен. Точек: ' + points.length + '.');
+  }
+}
+
+async function buildRoute() {
+  const yKey = $('yandexKey').value.trim() || localStorage.getItem('yandex_js_api_key') || '';
+  const oKey = $('orsKey').value.trim() || localStorage.getItem('heigit_ors_api_key') || '';
+  if (!yKey) return status('Нет ключа Yandex JavaScript API.');
+  if (!oKey) return status('Нет ключа HeiGIT/openrouteservice.');
+  let points;
+  try {
+    points = parseAllPoints();
+  } catch (e) {
+    return status('ОШИБКА\n' + e.message);
+  }
+
+  if (points.length < 2) return status('Нужно минимум две точки.');
+
+  try {
+    status('1/2 Загружаю Яндекс Карту…');
+    await loadYandexApi(yKey);
+    await ensureMap();
+    status('Яндекс Карта загружена. Проверяю точки…');
+
+    // Простая защита от грубой ошибки координат:
+    // каждая соседняя опорная точка должна быть разумно близка для городской прогулки.
+    for (let i = 0; i < points.length - 1; i++) {
+      const a = points[i], b = points[i + 1];
+      const dx = (b.lon - a.lon) * 63.0;
+      const dy = (b.lat - a.lat) * 111.0;
+      const straightKm = Math.sqrt(dx*dx + dy*dy);
+      if (straightKm > 4.0) {
+        throw new Error('Подозрительный скачок между точками «' + a.name + '» и «' + b.name + '»: около ' + straightKm.toFixed(1) + ' км по прямой.');
+      }
+    }
+
+    status('2/2 Строю ' + ($('mode').value === 'foot-walking' ? 'пешеходный' : 'велосипедный') + ' маршрут по проверенным координатам…');
+    const coords = points.map(p => p.ors);
+    const route = await routeGeoJSON(coords, $('mode').value, oKey);
+    drawRoute(route, points);
+  } catch(e) {
+    status('ОШИБКА\n' + e.message);
+  }
+}
+
+$('buildBtn').onclick = buildRoute;
+$('copyLinkBtn').onclick = copyRouteLink;
+
+async function autoBuildIfReady() {
+  const yKey = localStorage.getItem('yandex_js_api_key') || '';
+  const oKey = localStorage.getItem('heigit_ors_api_key') || '';
+
+  if (routeCameFromUrl && yKey && oKey) {
+    status('Маршрут получен из ссылки и декодирован. Строю автоматически…');
+    await buildRoute();
+  } else if (routeCameFromUrl) {
+    status('Маршрут получен из ссылки. Один раз сохраните оба API-ключа на этом устройстве и нажмите «Построить маршрут».');
+  }
+}
+
+setTimeout(autoBuildIfReady, 50);
+
+</script>
+</body>
+</html>
