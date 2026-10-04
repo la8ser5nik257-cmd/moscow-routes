@@ -187,15 +187,29 @@ function drawRoute(route, waypointCoords) {
   if (!geom || geom.type !== 'LineString') throw new Error('Маршрутизатор не вернул линию маршрута');
 
   const ycoords = geom.coordinates.map(([lon,lat]) => [lat,lon]);
-  routeLine = new ymaps.Polyline(ycoords, {}, {strokeWidth:5, strokeOpacity:0.85});
+  routeLine = new ymaps.Polyline(ycoords, {}, {strokeWidth:6, strokeOpacity:0.9});
   map.geoObjects.add(routeLine);
 
   pointCollection = new ymaps.GeoObjectCollection();
   waypointCoords.forEach(([lon,lat], i) => {
+    const last = waypointCoords.length - 1;
+    let preset = 'islands#blueCircleDotIcon';
+    let iconContent = String(i + 1);
+
+    if (i === 0) {
+      preset = 'islands#greenCircleIcon';
+      iconContent = 'С';
+    } else if (i === last) {
+      preset = 'islands#redCircleIcon';
+      iconContent = 'Ф';
+    }
+
     pointCollection.add(new ymaps.Placemark([lat,lon], {
-      iconContent: String(i+1),
+      iconContent,
       balloonContent: getPoints()[i] || ('Точка ' + (i+1))
-    }, {preset:'islands#blueStretchyIcon'}));
+    }, {
+      preset
+    }));
   });
   map.geoObjects.add(pointCollection);
 
