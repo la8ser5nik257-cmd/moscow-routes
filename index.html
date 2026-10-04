@@ -92,7 +92,38 @@ let apiReady = false;
 $('points').value = DEFAULT_POINTS.join('\n');
 
 function status(msg) { $('status').textContent = msg; }
-function getPoints() { return $('points').value.split('\n').map(x => x.trim()).filter(Boolean); }
+
+function getPointLines() {
+  return $('points').value.split('\n').map(x => x.trim()).filter(Boolean);
+}
+
+function parsePointLine(line, index) {
+  const parts = line.split('|');
+  if (parts.length !== 2) {
+    throw new Error('Строка ' + (index + 1) + ': нужен формат «Название | широта,долгота»');
+  }
+
+  const name = parts[0].trim();
+  const coordText = parts[1].trim();
+  const m = coordText.match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
+
+  if (!name || !m) {
+    throw new Error('Строка ' + (index + 1) + ': неверное название или координаты');
+  }
+
+  const lat = Number(m[1]);
+  const lon = Number(m[2]);
+
+  if (lat < 55.0 || lat > 56.2 || lon < 36.5 || lon > 38.7) {
+    throw new Error('Строка ' + (index + 1) + ': координаты выглядят как точка вне Москвы/ближнего Подмосковья');
+  }
+
+  return { name, lat, lon, ors: [lon, lat] };
+}
+
+function parseAllPoints() {
+  return getPointLines().map(parsePointLine);
+}
 
 function saveKey(field, storageName, label) {
   const key = $(field).value.trim();
@@ -225,6 +256,7 @@ async function buildRoute() {
     status('1/2 Загружаю Яндекс Карту…');
     await loadYandexApi(yKey);
     await ensureMap();
+    status('Яндекс Карта загружена. Проверяю точки…');
 
     // Простая защита от грубой ошибки координат:
     // каждая соседняя опорная точка должна быть разумно близка для городской прогулки.
